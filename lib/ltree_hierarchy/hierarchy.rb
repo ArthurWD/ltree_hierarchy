@@ -3,30 +3,34 @@ module Ltree
     def has_ltree_hierarchy(options = {})
       options = {
         fragment: :id,
-        parent_fragment: :parent_id,
-        path: :path
+        parent_foreign_key: :parent_id,
+        path: :path,
+        scope: nil
       }.merge(options)
 
-      options.assert_valid_keys(:fragment, :parent_fragment, :path)
+      options.assert_valid_keys(:fragment, :parent_foreign_key, :parent_primary_key, :path, :scope)
 
-      cattr_accessor :ltree_fragment_column, :ltree_parent_fragment_column, :ltree_path_column
+      cattr_accessor :ltree_fragment_column, :ltree_parent_foreign_column, :ltree_parent_primary_column, :ltree_path_column, :ltree_path_scope
 
       self.ltree_fragment_column = options[:fragment]
-      self.ltree_parent_fragment_column = options[:parent_fragment]
+      self.ltree_parent_foreign_column = options[:parent_foreign_key]
+      self.ltree_parent_primary_column = options[:parent_primary_key] || ltree_fragment_column
       self.ltree_path_column = options[:path]
+      self.ltree_path_scope = options[:scope]
 
-      belongs_to :parent, class_name: name, foreign_key: ltree_parent_fragment_column, primary_key: ltree_fragment_column
+      belongs_to :parent, class_name: name, foreign_key: ltree_parent_foreign_column, primary_key: ltree_parent_primary_column
 
-      validate :prevent_circular_paths, if: :ltree_parent_fragment_changed?
+      validate :prevent_circular_paths, if: :ltree_parent_foreign_key_changed?
+      validate :validate_ltree_path_scope
 
       after_create :commit_path
-      before_update :assign_path, :cascade_path_change, if: :ltree_parent_fragment_changed?
+      before_update :assign_path, :cascade_path_change, if: :ltree_parent_foreign_key_changed?
 
       include InstanceMethods
     end
 
     def roots
-      where("#{table_name}.#{ltree_parent_fragment_column}" => nil)
+      where("#{table_name}.#{ltree_parent_foreign_column}" => nil)
     end
 
     def at_depth(depth)
@@ -34,8 +38,8 @@ module Ltree
     end
 
     def leaves
-      subquery = where("#{table_name}.#{ltree_parent_fragment_column} IS NOT NULL")
-        .select("DISTINCT #{table_name}.#{ltree_parent_fragment_column}")
+      subquery = where("#{table_name}.#{ltree_parent_foreign_column} IS NOT NULL")
+        .select("DISTINCT #{table_name}.#{ltree_parent_foreign_column}")
 
       where("#{table_name}.#{ltree_fragment_column} NOT IN(#{subquery.to_sql})")
     end
@@ -57,7 +61,11 @@ module Ltree
 
     module InstanceMethods
       def ltree_scope
-        self.class.base_class
+        if self.class.ltree_path_scope.present?
+          self.class.base_class.where(self.class.ltree_path_scope => send(self.class.ltree_path_scope))
+        else
+          self.class.base_class
+        end
       end
 
       def ltree_fragment_column
@@ -68,16 +76,20 @@ module Ltree
         send(ltree_fragment_column)
       end
 
-      def ltree_parent_fragment_column
-        self.class.ltree_parent_fragment_column
+      def ltree_parent_foreign_column
+        self.class.ltree_parent_foreign_column
       end
 
-      def ltree_parent_fragment
-        send(ltree_parent_fragment_column)
+      def ltree_parent_foreign_key
+        send(ltree_parent_foreign_column)
       end
 
-      def ltree_parent_fragment_changed?
-        changed_attributes.key?(ltree_parent_fragment_column.to_s)
+      def ltree_parent_foreign_key_changed?
+        changed_attributes.key?(ltree_parent_foreign_column.to_s)
+      end
+
+      def ltree_parent_primary_key
+        send(ltree_parent_primary_column)
       end
 
       def ltree_path_column
@@ -94,7 +106,13 @@ module Ltree
 
       def prevent_circular_paths
         if parent && parent.ltree_path.split(".").include?(ltree_fragment.to_s)
-          errors.add(ltree_parent_fragment_column, :invalid)
+          errors.add(ltree_parent_foreign_column, :invalid)
+        end
+      end
+
+      def validate_ltree_path_scope
+        if parent && self.class.ltree_path_scope && send(self.class.ltree_path_scope) != parent.send(self.class.ltree_path_scope)
+          errors.add(self.class.ltree_path_scope, :invalid)
         end
       end
 
@@ -127,7 +145,7 @@ module Ltree
       end
 
       def root?
-        if ltree_parent_fragment
+        if ltree_parent_foreign_key
           false
         else
           parent.nil?
@@ -163,13 +181,13 @@ module Ltree
 
       def siblings
         ltree_scope.where(
-          "#{ltree_scope.table_name}.#{ltree_parent_fragment_column} = ? AND #{ltree_scope.table_name}.#{ltree_fragment_column} != ?",
-          ltree_parent_fragment, ltree_fragment
+          "#{ltree_scope.table_name}.#{ltree_parent_foreign_column} = ? AND #{ltree_scope.table_name}.#{ltree_fragment_column} != ?",
+          ltree_parent_foreign_key, ltree_fragment
         )
       end
 
       def self_and_siblings
-        ltree_scope.where("#{ltree_scope.table_name}.#{ltree_parent_fragment_column}" => ltree_parent_fragment)
+        ltree_scope.where("#{ltree_scope.table_name}.#{ltree_parent_foreign_column}" => ltree_parent_foreign_key)
       end
       alias :and_siblings :self_and_siblings
 
@@ -194,11 +212,11 @@ module Ltree
       alias :and_descendents :self_and_descendents
 
       def children
-        ltree_scope.where("#{ltree_scope.table_name}.#{ltree_parent_fragment_column}" => ltree_fragment)
+        ltree_scope.where("#{ltree_scope.table_name}.#{ltree_parent_foreign_column}" => ltree_parent_primary_key)
       end
 
       def self_and_children
-        ltree_scope.where("#{ltree_scope.table_name}.#{ltree_fragment_column} = :id OR #{ltree_scope.table_name}.#{ltree_parent_fragment_column} = :id", id: ltree_fragment)
+        ltree_scope.where("#{ltree_scope.table_name}.#{ltree_fragment_column} = :id OR #{ltree_scope.table_name}.#{ltree_parent_foreign_column} = :id", id: ltree_fragment)
       end
       alias :and_children :self_and_children
 

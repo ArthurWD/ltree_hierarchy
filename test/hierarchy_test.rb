@@ -9,7 +9,11 @@ class DefaultTreeNode < ActiveRecord::Base
 end
 
 class TreeNode < ActiveRecord::Base
-  has_ltree_hierarchy fragment: :fragment, parent_fragment: :parent_fragment, path: :materialized_path
+  has_ltree_hierarchy fragment: :fragment, parent_foreign_key: :parent_fragment, path: :materialized_path
+end
+
+class ScopedTreeNode < ActiveRecord::Base
+  has_ltree_hierarchy fragment: :fragment, parent_foreign_key: :parent_fragment, parent_primary_key: :id, path: :materialized_path, scope: :scope
 end
 
 class HierarchyTest < MiniTest::Unit::TestCase
@@ -34,11 +38,21 @@ class HierarchyTest < MiniTest::Unit::TestCase
       t.column :materialized_path, "ltree"
       t.timestamps null: false
     end
+
+    ScopedTreeNode.connection.create_table(:scoped_tree_nodes, primary_key: :id, force: true) do |t|
+      t.integer :fragment, null: false
+      t.integer :parent_fragment
+      t.integer :scope
+      t.column :materialized_path, "ltree"
+      t.index [:scope, :fragment], unique: true
+      t.timestamps null: false
+    end
   end
 
   def test_sensible_default_configuration
     assert_equal DefaultTreeNode.ltree_fragment_column, :id
-    assert_equal DefaultTreeNode.ltree_parent_fragment_column, :parent_id
+    assert_equal DefaultTreeNode.ltree_parent_foreign_column, :parent_id
+    assert_equal DefaultTreeNode.ltree_parent_primary_column, :id
     assert_equal DefaultTreeNode.ltree_path_column, :path
   end
 
@@ -88,6 +102,18 @@ class HierarchyTest < MiniTest::Unit::TestCase
     assert_equal root, child2.root
   end
 
+  def test_scoped_root_returns_first_item
+    root = ScopedTreeNode.create!(fragment: 1, scope: 1)
+    child1 = ScopedTreeNode.create!(fragment: 2, parent: root, scope: 1)
+    child2 = ScopedTreeNode.create!(fragment: 3, parent: child1, scope: 1)
+    root2 = ScopedTreeNode.create!(fragment: 1, scope: 2)
+    child2_1 = ScopedTreeNode.create!(fragment: 2, parent: root2, scope: 2)
+    child2_2 = ScopedTreeNode.create!(fragment: 3, parent: child2_1, scope: 2)
+
+    assert_equal root, child2.root
+    assert_equal root2, child2_2.root
+  end
+
   def test_root_returns_false_on_non_root
     root = TreeNode.create!
     child = TreeNode.create!(parent: root)
@@ -128,6 +154,20 @@ class HierarchyTest < MiniTest::Unit::TestCase
     root = TreeNode.create!
     child = TreeNode.create!(parent: root)
     assert_equal [root], child.ancestors.to_a
+  end
+
+  def test_finds_parent
+    root = TreeNode.create!
+    child = TreeNode.create!(parent: root)
+    assert_equal root, child.reload.parent
+  end
+
+  def test_finds_scoped_parent
+    ScopedTreeNode.create!(scope: 2, fragment: 1)
+    root = ScopedTreeNode.create!(scope: 1, fragment: 1)
+    ScopedTreeNode.create!(scope: 3, fragment: 1)
+    child = ScopedTreeNode.create!(parent: root, scope: 1, fragment: 2)
+    assert_equal root, child.reload.parent
   end
 
   def test_finds_self_and_ancestors
