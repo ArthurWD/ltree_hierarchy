@@ -18,7 +18,8 @@ module Ltree
       self.ltree_path_column = options[:path]
       self.ltree_path_scope = options[:scope]
 
-      belongs_to :parent, class_name: name, foreign_key: ltree_parent_foreign_column, primary_key: ltree_parent_primary_column
+      belongs_to :parent, class_name: name, foreign_key: ltree_parent_foreign_column, primary_key: ltree_parent_primary_column, inverse_of: :children
+      has_many :children, class_name: name, foreign_key: ltree_parent_foreign_column, primary_key: ltree_parent_primary_column, inverse_of: :parent
 
       validate :prevent_circular_paths, if: :ltree_parent_foreign_key_changed?
       validate :validate_ltree_path_scope
@@ -210,10 +211,6 @@ module Ltree
         self_and_descendants
       end
       alias :and_descendents :self_and_descendents
-
-      def children
-        ltree_scope.where("#{ltree_scope.table_name}.#{ltree_parent_foreign_column}" => ltree_parent_primary_key)
-      end
 
       def self_and_children
         ltree_scope.where("#{ltree_scope.table_name}.#{ltree_fragment_column} = :id OR #{ltree_scope.table_name}.#{ltree_parent_foreign_column} = :id", id: ltree_fragment)
